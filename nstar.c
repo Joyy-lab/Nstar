@@ -11,10 +11,13 @@
   #define  UNIT_TIME   (UNIT_LENGTH/UNIT_VELOCITY)
 #endif
 
+#define ORBIT_PARALLEL YES
+
 static double rk_timestep=1.e-4;
 static double eps_abs=1e-6, eps_rel=1e-6;
 static double h_init = 1e-8;
 Nstar g_nstar;
+static int nprocs;
 
 #if NSTAR == SCHWAR
   static int opinit = 0;
@@ -190,6 +193,11 @@ void SetupNstar (Nstar *ns, Grid *grid)
     
       /* Nstar Structure initialized */
       ns->init = 1;
+      #ifdef PARALLEL
+        printLog ("MPI_Comm_size: ");
+        MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
+        printLog ("%d.\n", nprocs);
+      #endif
       /* ************************* */
 }
 
@@ -270,20 +278,56 @@ void UpdateNstar (Nstar *ns, Grid *grid)
     //SCHWAR case: Schwarzschild orbits
     #elif NSTAR == SCHWAR
       int i, n, j;
-      static int first_call = 1;
+      static int first_call = 1, ndriver, start_idx;
       static gsl_odeiv2_system sys = {orbit_ode,
                                       NULL,
                                       6,
                                       &orbitparam
                                      };
       static gsl_odeiv2_driver **driver;
+      #if ORBIT_PARALLEL == YES
+        static int *recvcounts, *displs;
+        static double **allphase;
+      #endif
+      
+      
       if (driver == NULL){
-        driver = malloc(ns->nstar * sizeof(gsl_odeiv2_driver *));
-        for (i=0;i<ns->nstar;i++) {
+        #if ORBIT_PARALLEL == NO
+          ndriver = ns->nstar;
+          start_idx = 0;
+        #else
+          int base = ns->nstar / nprocs;
+          int rem  = ns->nstar % nprocs;
+          
+          if (prank < rem){ndriver = base + 1; start_idx = prank*ndriver;}
+          else{ndriver = base; start_idx = rem*(base+1)+(prank-rem)*base;}
+
+          recvcounts = malloc(nprocs*sizeof(int));
+          displs = malloc(nprocs*sizeof(int));
+          for (i=0;i<nprocs;i++){
+            int ln_r, st_r;
+            if (i < rem) {
+                ln_r = base + 1;
+                st_r = i * ln_r;
+            } else {
+                ln_r = base;
+                st_r = rem*(base+1) + (i - rem)*base;
+            }
+            recvcounts[i] = ln_r * 6;    /* 每行 6 个 double */
+            displs[i]     = st_r * 6;
+          }
+          
+          allphase = ARRAY_2D(ndriver, 6, double);
+          printLog ("Driver: %d. Start index: %d. \n", ndriver, start_idx);
+        #endif
+
+        driver = malloc(ndriver * sizeof(gsl_odeiv2_driver *));
+        for (i=0;i<ndriver;i++) {
           driver[i] = gsl_odeiv2_driver_alloc_y_new(&sys,
                                     gsl_odeiv2_step_rkck,
                                     h_init,
-                                    eps_abs, eps_rel);
+                                    eps_abs, 
+                                    eps_rel);
         }
         printLog ("!nstar.c: initialize ode driver\n");
       }
@@ -294,7 +338,7 @@ void UpdateNstar (Nstar *ns, Grid *grid)
         if (ns->evotime + dt> ns->lifetime){
             ns->start += ns->nstar;
             LoadSchwarzschildStars(ns->start+1, ns->nstar, ns, 0);
-            for (i=0;i<ns->nstar;i++) {
+            for (i=0;i<ndriver;i++) {
               gsl_odeiv2_driver_reset(driver[i]);
             }
             ns->time += ns->lifetime - ns->evotime;
@@ -302,9 +346,9 @@ void UpdateNstar (Nstar *ns, Grid *grid)
             dt = g_time - ns->time;
         }
         //step forward
-        for (i=0;i<ns->nstar;i++) {
+        for (i=0;i<ndriver;i++) {
           double tc = ns->time;
-          int status = gsl_odeiv2_driver_apply(driver[i], &tc, g_time, ns->phase[i]);
+          int status = gsl_odeiv2_driver_apply(driver[i], &tc, g_time, ns->phase[i+start_idx]);
           if(status != GSL_SUCCESS)
           {
             printLog ("error at t=%.3f: %s\n", tc, gsl_strerror(status));
@@ -312,13 +356,50 @@ void UpdateNstar (Nstar *ns, Grid *grid)
           }
           else{
             for (j=0;j<3;j++){
-              ns->coord[i][j] = ns->phase[i][j];
-              ns->v[i][j] = ns->phase[i][j+3];
+              ns->coord[i+start_idx][j] = ns->phase[i+start_idx][j];
+              ns->v[i+start_idx][j] = ns->phase[i+start_idx][j+3];
+              #if ORBIT_PARALLEL
+                allphase[i][j] = ns->phase[i+start_idx][j];
+                allphase[i][j+3] = ns->phase[i+start_idx][j+3];
+              #endif
             }
           }
         }
         ns->time = g_time;
         ns->evotime += dt;
+
+        //Gather at rank0 and send to each processor if integrate in parallel
+        #if ORBIT_PARALLEL == YES
+          MPI_Gatherv(
+                      &allphase[0][0],  /* 本 rank 发送缓冲 */
+                      ndriver * 6,               /* 本 rank 发送元素数 */
+                      MPI_DOUBLE,
+                      &ns->phase[0][0],          /* root 接收缓冲 */
+                      recvcounts, 
+                      displs,
+                      MPI_DOUBLE,
+                      0, MPI_COMM_WORLD
+                  );
+          MPI_Bcast(
+                    &ns->phase[0][0],  /* 从 phase[0][0] 开始 */
+                    ns->nstar * 6,         /* 总共 nstar*6 个 double */
+                    MPI_DOUBLE,
+                    0, MPI_COMM_WORLD
+                );
+
+          for (i=0;i<ns->nstar;i++){
+            for (j=0;j<3;j++){
+              ns->coord[i][j] = ns->phase[i][j];
+              ns->v[i][j] = ns->phase[i][j+3];
+              //if (i==0) {
+              //  int k;
+              //  printLog("prank %d: %f ", prank, g_time);
+              //  for (k=0;k<6;k++) printLog("%f ", ns->phase[i][k]);
+              //  printLog("\n");
+              //}
+            }
+          }
+        #endif
       }
     #endif
 }
@@ -574,10 +655,6 @@ void calcTotalAccel(double x, double y, double z, OrbitParams *p, double *accel)
   accel[1] = ay;
   accel[2] = az;
   // printLog ("calcTotalAccel: %f %f %f %f %f %f \n", x, y, z, ax, ay, az);
-}
-
-void interpolateAccel(double x, double y, double z, OrbitParams *p, double *accel){
-
 }
 
 /* ODE 系统： state = {x,y,z,vx,vy,vz} */
