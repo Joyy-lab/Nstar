@@ -22,6 +22,7 @@ static int nprocs;
 #if NSTAR == SCHWAR
   static int opinit = 0;
   static const int glorder=100;
+  static double toffset=0.0;
   // static const gsl_odeiv2_step_type * integrate_stepper = gsl_odeiv2_step_rk8pd;  
   OrbitParams orbitparam;
 #endif
@@ -182,10 +183,10 @@ void SetupNstar (Nstar *ns, Grid *grid)
     #elif NSTAR == SCHWAR
       ns->Orbtype = ARRAY_1D(nstar, int);
       ns->Orbindex = ARRAY_1D(nstar, int);
-      ns->start = (int) ((int) (g_time/ns->lifetime) * ns->nstar);
+      ns->start = (int) ((int) ((g_time+toffset)/ns->lifetime) * ns->nstar);
       LoadSchwarzschildStars(ns->start+1, nstar, ns, 0);
-      ns->evotime = fmod(g_time, ns->lifetime);
-      ns->time = (double) ((int) (g_time/ns->lifetime) * ns->time);
+      ns->evotime = fmod((g_time+toffset), ns->lifetime);
+      ns->time = (double) ((int) ((g_time+toffset)/ns->lifetime) * ns->lifetime);
       OrbitParamInit();
       if (opinit == 1) printLog ("orbitparam initialization succeed.\n");
     #endif
@@ -332,9 +333,9 @@ void UpdateNstar (Nstar *ns, Grid *grid)
         printLog ("!nstar.c: initialize ode driver\n");
       }
 
-      if (ns->time < g_time){
+      if (ns->time < g_time+toffset){
         // load new stars when evotime exceeds lifetime, also alloc new driver
-        double dt =  g_time - ns->time;
+        double dt =  g_time+toffset - ns->time;
         if (ns->evotime + dt> ns->lifetime){
             ns->start += ns->nstar;
             LoadSchwarzschildStars(ns->start+1, ns->nstar, ns, 0);
@@ -343,12 +344,12 @@ void UpdateNstar (Nstar *ns, Grid *grid)
             }
             ns->time += ns->lifetime - ns->evotime;
             ns->evotime = 0.0;
-            dt = g_time - ns->time;
+            dt = g_time + toffset - ns->time;
         }
         //step forward
         for (i=0;i<ndriver;i++) {
           double tc = ns->time;
-          int status = gsl_odeiv2_driver_apply(driver[i], &tc, g_time, ns->phase[i+start_idx]);
+          int status = gsl_odeiv2_driver_apply(driver[i], &tc, g_time+toffset, ns->phase[i+start_idx]);
           if(status != GSL_SUCCESS)
           {
             printLog ("error at t=%.3f: %s\n", tc, gsl_strerror(status));
@@ -365,7 +366,7 @@ void UpdateNstar (Nstar *ns, Grid *grid)
             }
           }
         }
-        ns->time = g_time;
+        ns->time = g_time+toffset;
         ns->evotime += dt;
 
         //Gather at rank0 and send to each processor if integrate in parallel
@@ -418,10 +419,14 @@ void UpdateAGBwind (const Data *d, double dt, Grid *grid)
   // printLog ("!nstar.c: UpdateAGBwind called.\n");
   /* initialize and update g_nstar */
   if (g_nstar.coord == NULL) SetupNstar(&g_nstar, grid);
-  #ifndef CHOMBO
-  if (g_nstar.time < g_time) 
-  #else
-  if ((g_nstar.time < g_time) && (grid->level == 0))
+  #if NSTAR == SIMPLE
+    #ifndef CHOMBO
+      if (g_nstar.time < g_time) 
+    #else
+      if ((g_nstar.time < g_time) && (grid->level == 0))
+    #endif
+  #elif NSTAR == SCHWAR
+    if (g_nstar.time < g_time+toffset) 
   #endif
   {
     UpdateNstar(&g_nstar, grid);
