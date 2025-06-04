@@ -12,6 +12,7 @@
 #endif
 
 #define ORBIT_PARALLEL YES
+#define STARSEARCH  NO
 
 static double rk_timestep=1.e-4;
 static double eps_abs=1e-6, eps_rel=1e-6;
@@ -408,7 +409,7 @@ void UpdateNstar (Nstar *ns, Grid *grid)
 /* *************************** */
 void UpdateAGBwind (const Data *d, double dt, Grid *grid)
 {
-  int   i, j, k, nv, nstar, ns;
+  int   i, j, k, nv, nstar, ns, idim;
   double *x1, *x2,*x3, *dx1, *dx2, *dx3;
   double  r, r0, cs_amb, r1, r_bh, r_acc, T, mu, temp;
   double  Vwind, rho, rho_amb, distance, distance1, dM, dmdt, omega, omega1;
@@ -460,7 +461,8 @@ void UpdateAGBwind (const Data *d, double dt, Grid *grid)
   //static grid still has grid->level 0
   //only update for g_intStage 0 and 1
   /* **************************************** */
-    TOT_LOOP(k,j,i){   
+    #if STARSEARCH == NO
+      DOM_LOOP(k,j,i){   
        double radius_scale;
        radius_scale = MAX(MAX(dx1[i], dx2[j]), dx3[k])/grid->dl_min[IDIR];
        rho_plus = dmdt*dt/(4./3.*CONST_PI*pow(r0, 3.))/pow(radius_scale, 3.0);
@@ -478,8 +480,8 @@ void UpdateAGBwind (const Data *d, double dt, Grid *grid)
             //fast wind with v > 100 km/s, set rho proportional to r-2.
             //in this case, rho_plus is M/(4*pi*rstar^3)*(rstar/r)^2
             double scale;
-            scale = pow(g_nstar.rstar/MAX(r, MAX(MAX(dx1[i], dx2[j]), dx3[k])/2.), 2.);
-            rho_plus = dmdt*dt/(4.*CONST_PI*pow(r0, 3.))*scale;
+            scale = pow(g_nstar.rstar*radius_scale/MAX(r, MAX(MAX(dx1[i], dx2[j]), dx3[k])/2.), 2.);
+            rho_plus = dmdt*dt/(4.*CONST_PI*pow(g_nstar.rstar*radius_scale, 3.))*scale;
           }
 
           for (nv=0;nv<NVAR;nv++) {
@@ -503,6 +505,147 @@ void UpdateAGBwind (const Data *d, double dt, Grid *grid)
         }
       }
     }
+      #elif STARSEARCH == YES
+    for (ns=0;ns<g_nstar.nstar;ns++) { 
+      // determine whether the star locates within the box
+      int ilo, ihi, imid, idim, is, js, ks;
+      double xs, ys, zs, tmp, rstar, sl[3], sr[3], il[3], ir[3];
+
+      cs = g_nstar.coord[ns];
+      xs = g_nstar.coord[ns][0];
+      ys = g_nstar.coord[ns][1];
+      zs = g_nstar.coord[ns][2];
+
+      // bisearch along x-axis 
+      ilo=grid->gbeg[0]; ihi=grid->gend[0]+1;
+      if ((xs<grid->xl_glob[0][ilo])||(xs>grid->xl_glob[0][ihi])) continue;
+      else{
+        while (ilo != ihi-1)
+        {
+          imid = (ilo + ihi)/2;
+          tmp = grid->xl_glob[0][imid];
+          if (xs < tmp) ihi=imid;
+          else ilo=imid;
+        }
+        is = ilo;
+      }
+
+      // bisearch along y-axis
+      ilo=grid->gbeg[1]; ihi=grid->gend[1]+1;
+      if ((ys<grid->xl_glob[1][ilo])||(ys>grid->xl_glob[1][ihi])) continue;
+      else{
+        while (ilo != ihi-1)
+        {
+          imid = (ilo + ihi)/2;
+          tmp = grid->xl_glob[1][imid];
+          if (ys < tmp) ihi=imid;
+          else ilo=imid;
+        }
+        js = ilo;
+      }
+
+      // bisearch along z-axis
+      ilo=grid->gbeg[2]; ihi=grid->gend[2]+1;
+      if ((zs<grid->xl_glob[2][ilo])||(zs>grid->xl_glob[2][ihi])) continue;
+      else{
+        while (ilo != ihi-1)
+        {
+          imid = (ilo + ihi)/2;
+          tmp = grid->xl_glob[2][imid];
+          if (zs < tmp) ihi=imid;
+          else ilo=imid;
+        }
+        ks = ilo;
+      }
+
+      //stellar radius and density augment adaptively determined by star position
+      rstar = g_inputParam[WIND_RADIUS]*MAX(MAX(grid->dx_glob[IDIR][is], grid->dx_glob[JDIR][js]), grid->dx_glob[KDIR][ks]);
+      rho_plus = dmdt*dt/(4./3.*CONST_PI*pow(rstar, 3.0));
+
+      for (idim=0;idim<3;idim++){
+        sl[idim] = cs[idim] - rstar;
+        sr[idim] = cs[idim] + rstar;
+      }
+
+      //ignore stars outside the box
+      if (((xs-rstar) > x1[grid->lend[IDIR]]) || ((xs+rstar) < x1[grid->lbeg[IDIR]])) continue;
+      if (((ys-rstar) > x2[grid->lend[JDIR]]) || ((ys+rstar) < x2[grid->lbeg[JDIR]])) continue;
+      if (((zs-rstar) > x3[grid->lend[KDIR]]) || ((zs+rstar) < x3[grid->lbeg[KDIR]])) continue;
+
+      //bisearch for loop boundary
+      for (idim=0;idim<3;idim++){
+        ilo=grid->beg[idim]; ihi=grid->end[idim]+1;
+        if ((sl[idim]<grid->xl_glob[idim][ilo])) il[idim] = grid->lbeg[idim];
+        else{
+          while (ilo != ihi-1)
+          {
+            imid = (ilo + ihi)/2;
+            tmp = grid->xl_glob[idim][imid];
+            if (sl[idim] < tmp) ihi=imid;
+            else ilo=imid;
+          }
+          il[idim] = ilo - (grid->beg[idim] - grid->lbeg[idim]); //transfer to local index
+        }
+      }
+
+      for (idim=0;idim<3;idim++){
+        ilo=grid->beg[idim]; ihi=grid->end[idim]+1;
+        if ((sr[idim]>grid->xl_glob[idim][ihi])) ir[idim] = grid->lend[idim];
+        else{
+          while (ilo != ihi-1)
+          {
+            imid = (ilo + ihi)/2;
+            tmp = grid->xl_glob[idim][imid];
+            if (sr[idim] < tmp) ihi=imid;
+            else ilo=imid;
+          }
+          ir[idim] = ilo - (grid->beg[idim] - grid->lbeg[idim]); //transfer to local index
+        }
+      }
+
+      //loop in the local grid. il and ir are for local index.
+      for (i=il[IDIR];i<ir[IDIR]+1;i++){
+        for (j=il[JDIR];j<ir[JDIR]+1;j++){
+          for (k=il[KDIR];k<ir[KDIR]+1;k++){
+            r  = sqrt(DIM_EXPAND((x1[i]-cs[IDIR])*(x1[i]-cs[IDIR]), 
+                                + (x2[j]-cs[JDIR])*(x2[j]-cs[JDIR]),
+                                + (x3[k]-cs[KDIR])*(x3[k]-cs[KDIR])
+                                  )); //distance to star
+            //printLog ("x=%12.6e, y=%12.6e, r=%12.6e\n", x1[i], x2[j], r);
+            if (r <= rstar){
+              vs = g_nstar.v[ns]; //velocity of star
+              if (Vwind*UNIT_VELOCITY > 1.e7){ 
+                //fast wind with v > 100 km/s, set rho proportional to r-2.
+                //in this case, rho_plus is M/(4*pi*rstar^3)*(rstar/r)^2
+                double scale;
+                scale = pow(rstar/MAX(r, MAX(MAX(dx1[i], dx2[j]), dx3[k])/2.), 2.);
+                rho_plus = dmdt*dt/(4.*CONST_PI*pow(rstar, 3.))*scale;
+              }
+
+              for (nv=0;nv<NVAR;nv++) {
+                  new_prim[nv] = old_prim[nv] = d->Vc[nv][k][j][i];
+              }
+              new_prim[RHO] += rho_plus;
+              DIM_EXPAND(
+                new_prim[VX1] = (old_prim[RHO]*old_prim[VX1] + rho_plus*(Vwind*(x1[i]-cs[IDIR])/MAX(1.e-12, r) + vs[IDIR]))/new_prim[RHO];, 
+                new_prim[VX2] = (old_prim[RHO]*old_prim[VX2] + rho_plus*(Vwind*(x2[j]-cs[JDIR])/MAX(1.e-12, r) + vs[JDIR]))/new_prim[RHO];,
+                new_prim[VX3] = (old_prim[RHO]*old_prim[VX3] + rho_plus*(Vwind*(x3[k]-cs[KDIR])/MAX(1.e-12, r) + vs[KDIR]))/new_prim[RHO];)
+              kin = 0.5*old_prim[RHO]*(DIM_EXPAND(old_prim[VX1]*old_prim[VX1], +old_prim[VX2]*old_prim[VX2], +old_prim[VX3]*old_prim[VX3]));
+              kinw = 0.5*rho_plus*(DIM_EXPAND((Vwind*(x1[i]-cs[IDIR])/MAX(1.e-12, r) + vs[IDIR])*(Vwind*(x1[i]-cs[IDIR])/MAX(1.e-12, r) + vs[IDIR]), 
+                      +(Vwind*(x2[j]-cs[JDIR])/MAX(1.e-12, r) + vs[JDIR])*(Vwind*(x2[j]-cs[JDIR])/MAX(1.e-12, r) + vs[JDIR]),
+                    +(Vwind*(x3[k]-cs[KDIR])/MAX(1.e-12, r) + vs[KDIR])*(Vwind*(x3[k]-cs[KDIR])/MAX(1.e-12, r) + vs[KDIR])));
+              kinnew = 0.5*new_prim[RHO]*(DIM_EXPAND(new_prim[VX1]*new_prim[VX1], +new_prim[VX2]*new_prim[VX2], +new_prim[VX3]*new_prim[VX3]));
+              new_prim[PRS] = (kin+old_prim[PRS]/(g_gamma - 1.)+kinw+rho_plus*T/(KELVIN*mu*(g_gamma-1.))-kinnew)*(g_gamma - 1.);
+                new_prim[TRC] = (old_prim[TRC]*old_prim[RHO] + rho_plus)/new_prim[RHO];
+              for (nv=0;nv<NVAR;nv++) {
+                  d->Vc[nv][k][j][i] = new_prim[nv];
+              }
+            }
+          }
+        }
+      }
+    }
+  #endif
 }
 
 void LoadSchwarzschildStars(int nskip, int nstar, Nstar *ns, int nsbegin)
