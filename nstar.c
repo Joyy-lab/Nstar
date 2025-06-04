@@ -12,7 +12,7 @@
 #endif
 
 #define ORBIT_PARALLEL YES
-#define STARSEARCH  NO
+#define STARSEARCH  YES
 
 static double rk_timestep=1.e-4;
 static double eps_abs=1e-6, eps_rel=1e-6;
