@@ -190,7 +190,7 @@ void SetupNstar (Nstar *ns, Grid *grid)
       ns->Orbtype = ARRAY_1D(nstar, int);
       ns->Orbindex = ARRAY_1D(nstar, int);
       #ifdef OFFSET_TIME
-        toffset = g_inputParam[OFFSET_TIME]
+        toffset = g_inputParam[OFFSET_TIME];
         printLog ("!nstar.c: orbit offset time %12.6e.\n", toffset);
       #endif
       ns->start = (int) ((int) ((g_time+toffset)/ns->lifetime) * ns->nstar);
