@@ -90,8 +90,13 @@ void SetupNstar (Nstar *ns, Grid *grid)
       ns->racc = 1.2*sqrt((double) DIMENSIONS)*ns->rstar; //1.2 is just a approximation
     #else
       ns->rstar = g_inputParam[WIND_RADIUS]*grid->dl_min[IDIR];
-      ns->racc = 0.6*sqrt((double) DIMENSIONS)*grid->dl_min[IDIR]; //1.2 is just a approximation
+      #ifdef ACC_RADIUS
+        ns->racc = g_inputParam[ACC_RADIUS]*grid->dl_min[IDIR]; //setup accretion radius
+      #else
+        ns->racc = 0.6*sqrt((double) DIMENSIONS)*grid->dl_min[IDIR]; //use inner 2^dim cells if accretion radius not set up. 1.2 is just a approximation
+      #endif
     #endif
+    printLog ("!nstar.c: accretion radius %12.6e. minimum stellar radius %12.6e.\n", ns->racc, ns->rstar);
 
     ns->coord = ARRAY_2D(nstar, 3, double);    
     ns->v = ARRAY_2D(nstar, 3, double);    
@@ -184,21 +189,26 @@ void SetupNstar (Nstar *ns, Grid *grid)
     #elif NSTAR == SCHWAR
       ns->Orbtype = ARRAY_1D(nstar, int);
       ns->Orbindex = ARRAY_1D(nstar, int);
+      #ifdef OFFSET_TIME
+        toffset = g_inputParam[OFFSET_TIME]
+        printLog ("!nstar.c: orbit offset time %12.6e.\n", toffset);
+      #endif
       ns->start = (int) ((int) ((g_time+toffset)/ns->lifetime) * ns->nstar);
       LoadSchwarzschildStars(ns->start+1, nstar, ns, 0);
       ns->evotime = fmod((g_time+toffset), ns->lifetime);
       ns->time = (double) ((int) ((g_time+toffset)/ns->lifetime) * ns->lifetime);
       OrbitParamInit();
-      if (opinit == 1) printLog ("orbitparam initialization succeed.\n");
+      if (opinit == 1) printLog ("!nstar.c: orbitparam initialization succeed.\n");
     #endif
       
     
       /* Nstar Structure initialized */
       ns->init = 1;
       #ifdef PARALLEL
-        printLog ("MPI_Comm_size: ");
+        printLog ("!nstar.c: MPI_Comm_size: ");
         MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
         printLog ("%d.\n", nprocs);
+        printLog ("!nstar.c: STARSEARCH %d. ORBIT_PARALLEL %d.\n", STARSEARCH, ORBIT_PARALLEL);
       #endif
       /* ************************* */
 }
@@ -636,7 +646,9 @@ void UpdateAGBwind (const Data *d, double dt, Grid *grid)
                     +(Vwind*(x3[k]-cs[KDIR])/MAX(1.e-12, r) + vs[KDIR])*(Vwind*(x3[k]-cs[KDIR])/MAX(1.e-12, r) + vs[KDIR])));
               kinnew = 0.5*new_prim[RHO]*(DIM_EXPAND(new_prim[VX1]*new_prim[VX1], +new_prim[VX2]*new_prim[VX2], +new_prim[VX3]*new_prim[VX3]));
               new_prim[PRS] = (kin+old_prim[PRS]/(g_gamma - 1.)+kinw+rho_plus*T/(KELVIN*mu*(g_gamma-1.))-kinnew)*(g_gamma - 1.);
+              #if NTRACER > 0
                 new_prim[TRC] = (old_prim[TRC]*old_prim[RHO] + rho_plus)/new_prim[RHO];
+              #endif
               for (nv=0;nv<NVAR;nv++) {
                   d->Vc[nv][k][j][i] = new_prim[nv];
               }
