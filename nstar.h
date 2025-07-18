@@ -6,6 +6,12 @@ typedef struct OrbitParams_ {
         double gmbh;
     } OrbitParams;
 
+typedef struct FPParams_ {
+  double *logr, *loggmstar; /* Enclosed mass profile. R and GM in simulation unit */
+  double gmbh; /* Mass of central black hole in GM unit */
+  int Ngrid; /* size of FP grid */
+} FPParams;
+
 typedef struct Nstar_{
     //constants
     int init; //whether stucture is initialzied
@@ -26,7 +32,7 @@ typedef struct Nstar_{
       double *M; //mean anomaly
       double *E; //eccentric anomaly
 
-    #elif NSTAR == SCHWAR
+    #elif NSTAR == SCHWAR || NSTAR == FOKPLA
       //constants for Schwarzschild orbits
       int *Orbtype; //orbit type, 1-3 is x, y, z tube orbit, 4 is box orbit, 5 is other
       int *Orbindex; //orbit index for each star
@@ -48,7 +54,11 @@ void UpdateAGBwind (const Data *d, double dt, Grid *grid);
 
 
 extern Nstar g_nstar;
-extern OrbitParams orbitparam;
+#if NSTAR == SCHWAR
+  extern OrbitParams orbitparam;
+#elif NSTAR == FOKPLA
+  extern FPParams orbitparam;
+#endif
     
 double F(double x, double y, double z, double tau, double *args);
 void force(double x, double y, double z, double tau, double *args, double *accel);
@@ -63,7 +73,7 @@ double   KeplerSolver (double, double); //init.c
 #if NSTAR == SIMPLE
     void rkck(double *y, double x, double h, double *yout, double *yerr, void (*derivs)(double, double *, double *));
     void HamiltonianDerivs(double, double, double *);
-#elif NSTAR ==  SCHWAR
+#elif NSTAR ==  SCHWAR || NSTAR == FOKPLA
     void LoadSchwarzschildStars(int nskip, int nstar, Nstar *ns, int nsbegin);
     double potfunc(double x, double y, double z, double tau, double *args);
     void forcefunc(double x, double y, double z, double tau, double *args, double *accel);
@@ -73,6 +83,7 @@ double   KeplerSolver (double, double); //init.c
     double calcTotalPot(double x, double y, double z, OrbitParams *p);
     void calcTotalAccel(double x, double y, double z, OrbitParams *p, double *accel);
     int orbit_ode(double t, const double y[], double dydt[], void *params);
+    void calcFPAccel(double x, double y, double z, FPParams *p, double *accel);
     void OrbitParamInit();
 #endif
 

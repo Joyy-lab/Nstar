@@ -26,6 +26,10 @@ static int nprocs;
   static double toffset=0.0;
   // static const gsl_odeiv2_step_type * integrate_stepper = gsl_odeiv2_step_rk8pd;  
   OrbitParams orbitparam;
+#elif NSTAR == FOKPLA
+  static int opinit = 0;
+  static double toffset=0.0;
+  FPParams orbitparam; /* orbitparam is the same */
 #endif
 
 static double const_g = 6.6743e-08, const_msun = 1.988409870698051e+33;
@@ -62,7 +66,7 @@ void SetupNstar (Nstar *ns, Grid *grid)
       ns->lifetime = RuntimeGet()->tstop; //just set lifetime to simulation duration
       fclose(fp);
       nstar = ns->nstar;
-    #elif NSTAR == SCHWAR
+    #elif NSTAR == SCHWAR || NSTAR == FOKPLA
       printLog ("!nstar.c: schwar.ini->");
       sprintf(orbit_file, "%s/schwar.ini", RuntimeGet()->output_dir);
       fp = fopen(orbit_file, "r");
@@ -186,7 +190,7 @@ void SetupNstar (Nstar *ns, Grid *grid)
       ns->time = g_time;
       #endif
       
-    #elif NSTAR == SCHWAR
+    #elif NSTAR == SCHWAR || NSTAR == FOKPLA
       ns->Orbtype = ARRAY_1D(nstar, int);
       ns->Orbindex = ARRAY_1D(nstar, int);
       #ifdef OFFSET_TIME
@@ -287,8 +291,10 @@ void UpdateNstar (Nstar *ns, Grid *grid)
         }
         ns->time = g_time;
       #endif //end of interation and Keplerian for SIMPLE
-    //SCHWAR case: Schwarzschild orbits
-    #elif NSTAR == SCHWAR
+
+    //case 1: SCHWAR - Schwarzschild orbits
+    //case 2: FOKPLA - Fokker-Planck isotropic model
+    #elif NSTAR == SCHWAR || NSTAR == FOKPLA
       int i, n, j;
       static int first_call = 1, ndriver, start_idx;
       static gsl_odeiv2_system sys = {orbit_ode,
@@ -436,7 +442,7 @@ void UpdateAGBwind (const Data *d, double dt, Grid *grid)
     #else
       if ((g_nstar.time < g_time) && (grid->level == 0))
     #endif
-  #elif NSTAR == SCHWAR
+  #elif NSTAR == SCHWAR || NSTAR == FOKPLA
     if (g_nstar.time < g_time+toffset) 
   #endif
   {
@@ -817,75 +823,170 @@ void calcTotalAccel(double x, double y, double z, OrbitParams *p, double *accel)
   // printLog ("calcTotalAccel: %f %f %f %f %f %f \n", x, y, z, ax, ay, az);
 }
 
-/* ODE 系统： state = {x,y,z,vx,vy,vz} */
-int orbit_ode(double t, const double y[], double dydt[], void *params){
-    OrbitParams *p = (OrbitParams*) params;
-
-    /* 位置导数 = 速度 */
-    dydt[0] = y[3];
-    dydt[1] = y[4];
-    dydt[2] = y[5];
-
-    calcTotalAccel(y[0], y[1], y[2], p, dydt+3);
-    return GSL_SUCCESS;
-}
-
-void OrbitParamInit()
-/* Initialize orbitparam for potential and acceleration calculation*/
+void calcFPAccel(double x, double y, double z, FPParams *p, double *accel)
+/* calculate acceleration of a FP potential */
 {
-  if (opinit == 0){
-       // ============ read mge data ==========
-    FILE *fp;
-    char orbit_file[256], line[256], *token;
-    int Nmge=0, i, j;
-    gsl_integration_glfixed_table *t = gsl_integration_glfixed_table_alloc(glorder);
-    double *glx, *glw;
+  double logr = log10(sqrt(x*x + y*y + z*z));
+  double r3 = pow(x*x + y*y + z*z, 3/2);
+  int klo, kmid, khi, rmid;
+  double gmencl, gmtotal;
+  /* ----------------------------------------------
+        Binary search for radius
+   ---------------------------------------------- */
 
-    fp = fopen("mge.dat", "r");
-    while (fgets(line, 256, fp) != NULL){
-        Nmge++;
-    }
-    rewind(fp);
-    printLog ("MGE components: %i\n", Nmge);
-
-    double **args = malloc(Nmge * sizeof(double*));
-    for (i=0;i<Nmge;i++){
-      *(args+i) = malloc(4*sizeof(double));
-    }
-    i = 0;
-    while (fgets(line, 256, fp) != NULL){
-      j=0;
-      token = strtok(line, " ");
-      while (token != NULL){
-        if (j == 0) args[i][j] = atof(token)*UNIT_GM; //times unitGM
-        else args[i][j] = atof(token);
-        printLog ("%.6f  ", args[i][j]);
-        token = strtok(NULL, " ");
-        j++;
-      }
-      printLog ("\n");
-      i++;
-    }
-    fclose(fp);
-
-    
-    orbitparam.args = args;
-    orbitparam.Nmge = Nmge;
-    orbitparam.glorder = glorder;
-    orbitparam.glx = malloc(glorder * sizeof(double));
-    orbitparam.glw = malloc(glorder * sizeof(double));
-    for(i=0; i<glorder; i++) gsl_integration_glfixed_point(0.0, 1.0, i, (orbitparam.glx)+i, (orbitparam.glw)+i, t);
-    orbitparam.gmbh = g_inputParam[M_BH]*UNIT_GM;
-    
-    // output log
-    printLog("orbitparam glorder: %d\n", glorder);
-    printLog("orbitparam glx[0]: %f\n", orbitparam.glx[0]);
-    printLog("orbitparam glw[0]: %f\n", orbitparam.glw[0]);
-    printLog("orbitparam GMBH: %f\n", orbitparam.gmbh);
-
-    opinit = 1;
+  klo = 0;
+  khi = p->Ngrid - 1;
+  //printLog ("binary search start...");
+  if (logr < p->logr[klo]){
+    gmencl = 0.0;
   }
+  else{
+    while (klo != (khi - 1)){
+      kmid = (klo + khi)/2;
+      rmid = p->logr[kmid];
+      //printLog ("Tmid = %.3f \n", Tmid);
+      if (logr <= rmid){
+        khi = kmid;
+      }else if (logr > rmid){
+        klo = kmid;
+      }
+    }
+    gmencl = pow(10, ((logr - p->logr[klo])*p->loggmstar[khi] + (p->logr[khi]-logr)*p->loggmstar[klo])/(p->logr[khi] - p->logr[klo]));
+  }
+  gmtotal = gmencl + p->gmbh;
+  accel[0] = -gmtotal/r3*x;
+  accel[1] = -gmtotal/r3*y;
+  accel[2] = -gmtotal/r3*z;
 }
+
+/* ODE 系统： state = {x,y,z,vx,vy,vz} */
+#if NSTAR == SCHWAR
+  int orbit_ode(double t, const double y[], double dydt[], void *params){
+      OrbitParams *p = (OrbitParams*) params;
+
+      /* 位置导数 = 速度 */
+      dydt[0] = y[3];
+      dydt[1] = y[4];
+      dydt[2] = y[5];
+
+      calcTotalAccel(y[0], y[1], y[2], p, dydt+3);
+      return GSL_SUCCESS;
+  }
+#elif NSTAR == FOKPLA
+  int orbit_ode(double t, const double y[], double dydt[], void *params){
+      FPParams *p = (FPParams*) params;
+
+      /* 位置导数 = 速度 */
+      dydt[0] = y[3];
+      dydt[1] = y[4];
+      dydt[2] = y[5];
+
+      calcFPAccel(y[0], y[1], y[2], p, dydt+3);
+      return GSL_SUCCESS;
+  }
+#endif
+
+#if NSTAR == SCHWAR
+  void OrbitParamInit()
+  /* Initialize orbitparam for potential and acceleration calculation*/
+  {
+    if (opinit == 0){
+        // ============ read mge data ==========
+      FILE *fp;
+      char orbit_file[256], line[256], *token;
+      int Nmge=0, i, j;
+      gsl_integration_glfixed_table *t = gsl_integration_glfixed_table_alloc(glorder);
+      double *glx, *glw;
+
+      fp = fopen("mge.dat", "r");
+      while (fgets(line, 256, fp) != NULL){
+          Nmge++;
+      }
+      rewind(fp);
+      printLog ("MGE components: %i\n", Nmge);
+
+      double **args = malloc(Nmge * sizeof(double*));
+      for (i=0;i<Nmge;i++){
+        *(args+i) = malloc(4*sizeof(double));
+      }
+      i = 0;
+      while (fgets(line, 256, fp) != NULL){
+        j=0;
+        token = strtok(line, " ");
+        while (token != NULL){
+          if (j == 0) args[i][j] = atof(token)*UNIT_GM; //times unitGM
+          else args[i][j] = atof(token);
+          printLog ("%.6f  ", args[i][j]);
+          token = strtok(NULL, " ");
+          j++;
+        }
+        printLog ("\n");
+        i++;
+      }
+      fclose(fp);
+
+      
+      orbitparam.args = args;
+      orbitparam.Nmge = Nmge;
+      orbitparam.glorder = glorder;
+      orbitparam.glx = malloc(glorder * sizeof(double));
+      orbitparam.glw = malloc(glorder * sizeof(double));
+      for(i=0; i<glorder; i++) gsl_integration_glfixed_point(0.0, 1.0, i, (orbitparam.glx)+i, (orbitparam.glw)+i, t);
+      orbitparam.gmbh = g_inputParam[M_BH]*UNIT_GM;
+      
+      // output log
+      printLog("orbitparam glorder: %d\n", glorder);
+      printLog("orbitparam glx[0]: %f\n", orbitparam.glx[0]);
+      printLog("orbitparam glw[0]: %f\n", orbitparam.glw[0]);
+      printLog("orbitparam GMBH: %f\n", orbitparam.gmbh);
+
+      opinit = 1;
+    }
+  }
+#elif NSTAR == FOKPLA
+  void OrbitParamInit()
+  /* Initialize Fokker-Planck parameters for potential and acceleration calculation*/
+  {
+    if (opinit == 0){
+      // ============ read enclosed mass ==========
+      FILE *fp;
+      char line[256], *token;
+      int Nr=0, i, j;
+
+      fp = fopen("FPprofile.dat", "r");
+      while (fgets(line, 256, fp) != NULL){
+          Nr++;
+      }
+      rewind(fp);
+      printLog ("Fokker-Planck grid: %i\n", Nr);
+
+      double *logr = malloc(Nr * sizeof(double)), *loggmstar = malloc(Nr * sizeof(double));
+      i = 0;
+      while (fgets(line, 256, fp) != NULL){
+        j=0;
+        token = strtok(line, " ");
+        while (token != NULL){
+          if (j == 0) logr[i] = log10(atof(token));
+          if (j == 1) loggmstar[i] = log10(atof(token)*UNIT_GM);   
+          token = strtok(NULL, " ");
+          j++;
+        }
+        if (i < 10) printLog ("%.6e  %.6e \n", pow(10, logr[i]), pow(10, loggmstar[i])/UNIT_GM);
+        i++;
+      }
+      fclose(fp);
+
+      orbitparam.logr = logr;
+      orbitparam.loggmstar = loggmstar;
+      orbitparam.gmbh = g_inputParam[M_BH]*UNIT_GM;
+      orbitparam.Ngrid = Nr;
+      
+      // output log
+      printLog("orbitparam GMBH: %f\n", orbitparam.gmbh);
+      opinit = 1;
+    }
+  }
+#endif
 
 void rkck(double *y, double x, double h, double *yout, double *yerr, void (*derivs)(double, double *, double *))
 {
