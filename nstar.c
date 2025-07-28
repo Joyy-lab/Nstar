@@ -827,7 +827,7 @@ void calcFPAccel(double x, double y, double z, FPParams *p, double *accel)
 /* calculate acceleration of a FP potential */
 {
   double logr = log10(sqrt(x*x + y*y + z*z));
-  double r3 = pow(x*x + y*y + z*z, 3/2);
+  double r3 = pow(x*x + y*y + z*z, 3.0/2.0);
   int klo, kmid, khi, rmid;
   double gmencl, gmtotal;
   /* ----------------------------------------------
