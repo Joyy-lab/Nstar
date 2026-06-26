@@ -12,6 +12,10 @@ typedef struct FPParams_ {
   int Ngrid; /* size of FP grid */
 } FPParams;
 
+typedef struct BHParams_ {
+  double gmbh; /* Mass of central black hole in GM unit */
+} BHParams;
+
 typedef struct Nstar_{
     //constants
     int init; //whether stucture is initialzied
@@ -32,7 +36,7 @@ typedef struct Nstar_{
       double *M; //mean anomaly
       double *E; //eccentric anomaly
 
-    #elif NSTAR == SCHWAR || NSTAR == FOKPLA
+    #elif NSTAR == SCHWAR || NSTAR == FOKPLA || NSTAR == BLACKHOLE
       //constants for Schwarzschild orbits
       int *Orbtype; //orbit type, 1-3 is x, y, z tube orbit, 4 is box orbit, 5 is other
       int *Orbindex; //orbit index for each star
@@ -58,6 +62,8 @@ extern Nstar g_nstar;
   extern OrbitParams orbitparam;
 #elif NSTAR == FOKPLA
   extern FPParams orbitparam;
+#elif NSTAR == BLACKHOLE
+  extern BHParams orbitparam;
 #endif
     
 double F(double x, double y, double z, double tau, double *args);
@@ -73,7 +79,7 @@ double   KeplerSolver (double, double); //init.c
 #if NSTAR == SIMPLE
     void rkck(double *y, double x, double h, double *yout, double *yerr, void (*derivs)(double, double *, double *));
     void HamiltonianDerivs(double, double, double *);
-#elif NSTAR ==  SCHWAR || NSTAR == FOKPLA
+#elif NSTAR ==  SCHWAR || NSTAR == FOKPLA || NSTAR == BLACKHOLE
     void LoadSchwarzschildStars(int nskip, int nstar, Nstar *ns, int nsbegin);
     double potfunc(double x, double y, double z, double tau, double *args);
     void forcefunc(double x, double y, double z, double tau, double *args, double *accel);

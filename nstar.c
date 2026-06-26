@@ -11,7 +11,10 @@
   #define  UNIT_TIME   (UNIT_LENGTH/UNIT_VELOCITY)
 #endif
 
-#define ORBIT_PARALLEL YES
+#ifndef ORBIT_PARALLEL
+  #define ORBIT_PARALLEL YES
+#endif
+
 #define STARSEARCH  YES
 
 static double rk_timestep=1.e-4;
@@ -30,6 +33,10 @@ static int nprocs;
   static int opinit = 0;
   static double toffset=0.0;
   FPParams orbitparam; /* orbitparam is the same */
+#elif NSTAR == BLACKHOLE
+  static int opinit = 0;
+  static double toffset=0.0;
+  BHParams orbitparam;
 #endif
 
 static double const_g = 6.6743e-08, const_msun = 1.988409870698051e+33;
@@ -66,7 +73,7 @@ void SetupNstar (Nstar *ns, Grid *grid)
       ns->lifetime = RuntimeGet()->tstop; //just set lifetime to simulation duration
       fclose(fp);
       nstar = ns->nstar;
-    #elif NSTAR == SCHWAR || NSTAR == FOKPLA
+    #elif NSTAR == SCHWAR || NSTAR == FOKPLA || NSTAR == BLACKHOLE
       printLog ("!nstar.c: schwar.ini->");
       sprintf(orbit_file, "%s/schwar.ini", RuntimeGet()->output_dir);
       fp = fopen(orbit_file, "r");
@@ -190,7 +197,7 @@ void SetupNstar (Nstar *ns, Grid *grid)
       ns->time = g_time;
       #endif
       
-    #elif NSTAR == SCHWAR || NSTAR == FOKPLA
+    #elif NSTAR == SCHWAR || NSTAR == FOKPLA || NSTAR == BLACKHOLE
       ns->Orbtype = ARRAY_1D(nstar, int);
       ns->Orbindex = ARRAY_1D(nstar, int);
       #ifdef OFFSET_TIME
@@ -294,7 +301,7 @@ void UpdateNstar (Nstar *ns, Grid *grid)
 
     //case 1: SCHWAR - Schwarzschild orbits
     //case 2: FOKPLA - Fokker-Planck isotropic model
-    #elif NSTAR == SCHWAR || NSTAR == FOKPLA
+    #elif NSTAR == SCHWAR || NSTAR == FOKPLA || NSTAR == BLACKHOLE
       int i, n, j;
       static int first_call = 1, ndriver, start_idx;
       static gsl_odeiv2_system sys = {orbit_ode,
@@ -442,7 +449,7 @@ void UpdateAGBwind (const Data *d, double dt, Grid *grid)
     #else
       if ((g_nstar.time < g_time) && (grid->level == 0))
     #endif
-  #elif NSTAR == SCHWAR || NSTAR == FOKPLA
+  #elif NSTAR == SCHWAR || NSTAR == FOKPLA || NSTAR == BLACKHOLE
     if (g_nstar.time < g_time+toffset) 
   #endif
   {
@@ -884,6 +891,18 @@ void calcFPAccel(double x, double y, double z, FPParams *p, double *accel)
       calcFPAccel(y[0], y[1], y[2], p, dydt+3);
       return GSL_SUCCESS;
   }
+#elif NSTAR == BLACKHOLE
+  int orbit_ode(double t, const double y[], double dydt[], void *params){
+      BHParams *p = (BHParams*) params;
+
+      /* 位置导数 = 速度 */
+      dydt[0] = y[3];
+      dydt[1] = y[4];
+      dydt[2] = y[5];
+
+      calcBHAccel(y[0], y[1], y[2], p, dydt+3);
+      return GSL_SUCCESS;
+  }
 #endif
 
 #if NSTAR == SCHWAR
@@ -980,6 +999,18 @@ void calcFPAccel(double x, double y, double z, FPParams *p, double *accel)
       orbitparam.loggmstar = loggmstar;
       orbitparam.gmbh = g_inputParam[M_BH]*UNIT_GM;
       orbitparam.Ngrid = Nr;
+      
+      // output log
+      printLog("orbitparam GMBH: %f\n", orbitparam.gmbh);
+      opinit = 1;
+    }
+  }
+#elif NSTAR == BLACKHOLE
+  void OrbitParamInit()
+  /* Initialize Fokker-Planck parameters for potential and acceleration calculation*/
+  {
+    if (opinit == 0){
+      orbitparam.gmbh = g_inputParam[M_BH]*UNIT_GM;
       
       // output log
       printLog("orbitparam GMBH: %f\n", orbitparam.gmbh);
