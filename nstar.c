@@ -900,7 +900,7 @@ void calcFPAccel(double x, double y, double z, FPParams *p, double *accel)
       dydt[1] = y[4];
       dydt[2] = y[5];
 
-      calcBHAccel(y[0], y[1], y[2], p, dydt+3);
+      calcBHAccel(y[0], y[1], y[2], p->gmbh, dydt+3, dydt+4, dydt+5);
       return GSL_SUCCESS;
   }
 #endif
