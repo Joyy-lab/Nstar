@@ -194,10 +194,11 @@ void SetupNstar (Nstar *ns, Grid *grid)
             ns->phase[j][i] = orb[i];
             ns->phase[j][i+3] = orb[i+3];
             }
+        #endif
       }
       UpdateNstar (ns, grid);
       ns->time = g_time;
-      #endif
+      
       
     #elif NSTAR == SCHWAR || NSTAR == FOKPLA || NSTAR == BLACKHOLE
       ns->Orbtype = ARRAY_1D(nstar, int);
@@ -675,6 +676,7 @@ void UpdateAGBwind (const Data *d, double dt, Grid *grid)
   #endif
 }
 
+#if NSTAR ==  SCHWAR || NSTAR == FOKPLA || NSTAR == BLACKHOLE
 void LoadSchwarzschildStars(int nskip, int nstar, Nstar *ns, int nsbegin)
 /* Skip first "start" lines and read nstart lines
  * Usually this is nstar*round+1
@@ -727,6 +729,7 @@ void LoadSchwarzschildStars(int nskip, int nstar, Nstar *ns, int nsbegin)
     printLog ("Load %d stars from line %d\n", nstar, nskip);
     fclose(fp);
 }
+#endif
 
 // double F(double, double, double, double, double *)
 double potfunc(double x, double y, double z, double tau, double *args){

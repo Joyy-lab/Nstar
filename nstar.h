@@ -74,11 +74,11 @@ void calcBHAccel(double x, double y, double z, double gmbh, double *ax, double *
 int orbit_ode(double t, const double y[], double dydt[], void *params);
 void OrbitParamInit();
 
-double   KeplerSolver (double, double); //init.c
+double KeplerSolver (double, double); //init.c
 
 #if NSTAR == SIMPLE
     void rkck(double *y, double x, double h, double *yout, double *yerr, void (*derivs)(double, double *, double *));
-    void HamiltonianDerivs(double, double, double *);
+    void HamiltonianDerivs(double, double *, double *);
 #elif NSTAR ==  SCHWAR || NSTAR == FOKPLA || NSTAR == BLACKHOLE
     void LoadSchwarzschildStars(int nskip, int nstar, Nstar *ns, int nsbegin);
     double potfunc(double x, double y, double z, double tau, double *args);
