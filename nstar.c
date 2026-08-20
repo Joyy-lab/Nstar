@@ -15,7 +15,9 @@
   #define ORBIT_PARALLEL YES
 #endif
 
-#define STARSEARCH  YES
+#ifndef STARSEARCH
+  #define STARSEARCH  YES
+#endif
 
 static double rk_timestep=1.e-4;
 static double eps_abs=1e-6, eps_rel=1e-6;
@@ -894,13 +896,17 @@ void calcFPAccel(double x, double y, double z, FPParams *p, double *accel)
 #elif NSTAR == BLACKHOLE
   int orbit_ode(double t, const double y[], double dydt[], void *params){
       BHParams *p = (BHParams*) params;
-
+      double ax=0.0, ay=0.0, az=0.0;
       /* 位置导数 = 速度 */
       dydt[0] = y[3];
       dydt[1] = y[4];
       dydt[2] = y[5];
 
-      calcBHAccel(y[0], y[1], y[2], p->gmbh, dydt+3, dydt+4, dydt+5);
+      calcBHAccel(y[0], y[1], y[2], p->gmbh, &ax, &ay, &az);
+      
+      dydt[3] = ax;
+      dydt[4] = ay;
+      dydt[5] = az;
       return GSL_SUCCESS;
   }
 #endif
